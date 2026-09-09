@@ -1,1 +1,342 @@
-hello world
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Game of Life</title>
+<style>
+  /* ---------- Basic black & white styling ---------- */
+  body {
+    font-family: sans-serif;
+    background: #fff;
+    color: #000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+  }
+
+  h1 {
+    font-size: 20px;
+    margin-bottom: 10px;
+  }
+
+  #controls {
+    margin-bottom: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+    align-items: center;
+  }
+
+  button {
+    background: #fff;
+    color: #000;
+    border: 1px solid #000;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+
+  button:hover {
+    background: #000;
+    color: #fff;
+  }
+
+  button:disabled {
+    opacity: 0.4;
+    cursor: default;
+    background: #fff;
+    color: #000;
+  }
+
+  label {
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  #generationCount {
+    font-size: 14px;
+    margin-bottom: 8px;
+  }
+
+  canvas {
+    border: 1px solid #000;
+    /* Prevent the browser from treating clicks/drags on canvas as text selection */
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+
+<h1>Game of Life</h1>
+
+<div id="controls">
+  <button id="runPauseBtn">Run</button>
+  <button id="stepBtn">Step</button>
+  <button id="resetBtn">Reset</button>
+  <label for="speedSlider">Speed:
+    <input type="range" id="speedSlider" min="1" max="30" value="10">
+  </label>
+</div>
+
+<div id="generationCount">Generation: 0</div>
+
+<canvas id="grid"></canvas>
+
+<script>
+/* =========================================================================
+   CONFIGURATION
+   Change these values to adjust grid size / cell size.
+   ========================================================================= */
+const COLS = 60;        // number of columns in the grid
+const ROWS = 40;        // number of rows in the grid
+const CELL_SIZE = 12;   // pixel size of each cell (width & height)
+
+/* =========================================================================
+   SETUP
+   ========================================================================= */
+const canvas = document.getElementById('grid');
+const ctx = canvas.getContext('2d');
+canvas.width = COLS * CELL_SIZE;
+canvas.height = ROWS * CELL_SIZE;
+
+// The grid is stored as a 2D array of 0s (dead) and 1s (alive).
+// grid[row][col]
+let grid = createEmptyGrid();
+
+// Simulation state
+let isRunning = false;      // whether the simulation is auto-playing
+let generation = 0;         // generation counter
+let intervalId = null;      // handle for the running setInterval, so we can clear it
+let speed = 10;              // generations per second (controlled by slider)
+
+// Mouse-drag drawing state
+let isMouseDown = false;
+let drawValue = 1; // whether the drag paints cells alive (1) or dead (0),
+                    // decided by the state of the first cell clicked
+
+/* =========================================================================
+   GRID HELPERS
+   ========================================================================= */
+
+// Creates a ROWS x COLS grid filled with 0s (all cells dead)
+function createEmptyGrid() {
+  const g = [];
+  for (let r = 0; r < ROWS; r++) {
+    g.push(new Array(COLS).fill(0));
+  }
+  return g;
+}
+
+// Counts how many of a cell's 8 neighbors are alive.
+// Uses simple bounds-checking (no wrap-around) — edges of the grid are
+// treated as "dead" beyond the border.
+function countLiveNeighbors(g, row, col) {
+  let count = 0;
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      if (dr === 0 && dc === 0) continue; // skip the cell itself
+      const r = row + dr;
+      const c = col + dc;
+      if (r >= 0 && r < ROWS && c >= 0 && c < COLS) {
+        count += g[r][c];
+      }
+    }
+  }
+  return count;
+}
+
+// Computes the next generation from the current grid, following the
+// standard Conway's Game of Life rules:
+//   1. Any live cell with 2 or 3 live neighbors survives.
+//   2. Any dead cell with exactly 3 live neighbors becomes alive.
+//   3. All other live cells die; all other dead cells stay dead.
+function computeNextGeneration(g) {
+  const next = createEmptyGrid();
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const liveNeighbors = countLiveNeighbors(g, r, c);
+      const isAlive = g[r][c] === 1;
+
+      if (isAlive && (liveNeighbors === 2 || liveNeighbors === 3)) {
+        next[r][c] = 1; // survives
+      } else if (!isAlive && liveNeighbors === 3) {
+        next[r][c] = 1; // becomes alive (reproduction)
+      } else {
+        next[r][c] = 0; // dies or stays dead
+      }
+    }
+  }
+  return next;
+}
+
+/* =========================================================================
+   DRAWING
+   ========================================================================= */
+
+function drawGrid() {
+  // Background
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Live cells
+  ctx.fillStyle = '#000';
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (grid[r][c] === 1) {
+        ctx.fillRect(c * CELL_SIZE, r * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+      }
+    }
+  }
+
+  // Grid lines
+  ctx.strokeStyle = '#ccc';
+  ctx.lineWidth = 1;
+  for (let c = 0; c <= COLS; c++) {
+    ctx.beginPath();
+    ctx.moveTo(c * CELL_SIZE, 0);
+    ctx.lineTo(c * CELL_SIZE, canvas.height);
+    ctx.stroke();
+  }
+  for (let r = 0; r <= ROWS; r++) {
+    ctx.beginPath();
+    ctx.moveTo(0, r * CELL_SIZE);
+    ctx.lineTo(canvas.width, r * CELL_SIZE);
+    ctx.stroke();
+  }
+}
+
+function updateGenerationLabel() {
+  document.getElementById('generationCount').textContent = 'Generation: ' + generation;
+}
+
+/* =========================================================================
+   SIMULATION CONTROL
+   ========================================================================= */
+
+// Advances the simulation by exactly one generation (used both by the
+// "Step" button while paused, and internally by the running loop).
+function stepForward() {
+  grid = computeNextGeneration(grid);
+  generation++;
+  drawGrid();
+  updateGenerationLabel();
+}
+
+function startRunning() {
+  isRunning = true;
+  document.getElementById('runPauseBtn').textContent = 'Pause';
+  document.getElementById('stepBtn').disabled = true; // stepping only makes sense while paused
+  scheduleNextTick();
+}
+
+function stopRunning() {
+  isRunning = false;
+  document.getElementById('runPauseBtn').textContent = 'Run';
+  document.getElementById('stepBtn').disabled = false;
+  if (intervalId !== null) {
+    clearTimeout(intervalId);
+    intervalId = null;
+  }
+}
+
+// Uses setTimeout (rather than setInterval) so the delay can be changed
+// on the fly whenever the speed slider moves.
+function scheduleNextTick() {
+  const delayMs = 1000 / speed;
+  intervalId = setTimeout(() => {
+    if (!isRunning) return;
+    stepForward();
+    scheduleNextTick();
+  }, delayMs);
+}
+
+function resetGrid() {
+  stopRunning();
+  grid = createEmptyGrid();
+  generation = 0;
+  drawGrid();
+  updateGenerationLabel();
+}
+
+/* =========================================================================
+   MOUSE INTERACTION — draw cells by clicking or dragging
+   ========================================================================= */
+
+function getCellFromEvent(evt) {
+  const rect = canvas.getBoundingClientRect();
+  const x = evt.clientX - rect.left;
+  const y = evt.clientY - rect.top;
+  const col = Math.floor(x / CELL_SIZE);
+  const row = Math.floor(y / CELL_SIZE);
+  return { row, col };
+}
+
+function setCell(row, col, value) {
+  if (row >= 0 && row < ROWS && col >= 0 && col < COLS) {
+    grid[row][col] = value;
+    drawGrid();
+  }
+}
+
+canvas.addEventListener('mousedown', (evt) => {
+  const { row, col } = getCellFromEvent(evt);
+  if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return;
+  isMouseDown = true;
+  // Toggle the clicked cell, and remember the resulting state so dragging
+  // paints consistently (e.g. if we turned it on, dragging paints "on").
+  drawValue = grid[row][col] === 1 ? 0 : 1;
+  setCell(row, col, drawValue);
+});
+
+canvas.addEventListener('mousemove', (evt) => {
+  if (!isMouseDown) return;
+  const { row, col } = getCellFromEvent(evt);
+  setCell(row, col, drawValue);
+});
+
+window.addEventListener('mouseup', () => {
+  isMouseDown = false;
+});
+
+/* =========================================================================
+   BUTTON / SLIDER WIRING
+   ========================================================================= */
+
+document.getElementById('runPauseBtn').addEventListener('click', () => {
+  if (isRunning) {
+    stopRunning();
+  } else {
+    startRunning();
+  }
+});
+
+document.getElementById('stepBtn').addEventListener('click', () => {
+  // Only allowed while paused (button is disabled while running anyway).
+  stepForward();
+});
+
+document.getElementById('resetBtn').addEventListener('click', resetGrid);
+
+document.getElementById('speedSlider').addEventListener('input', (evt) => {
+  speed = Number(evt.target.value);
+  // If currently running, restart the tick loop so the new speed
+  // takes effect immediately rather than waiting for the current delay.
+  if (isRunning) {
+    clearTimeout(intervalId);
+    scheduleNextTick();
+  }
+});
+
+/* =========================================================================
+   INITIAL RENDER
+   ========================================================================= */
+drawGrid();
+updateGenerationLabel();
+</script>
+
+</body>
+</html>
