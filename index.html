@@ -57,9 +57,49 @@
     gap: 4px;
   }
 
+  /* Keep the probability number field narrow — it only needs to fit
+     a few digits like "35.0" */
+  #probabilityInput {
+    width: 55px;
+  }
+
+  /* Same idea for the noise number field */
+  #noiseInput {
+    width: 55px;
+  }
+
   #generationCount {
     font-size: 14px;
     margin-bottom: 8px;
+  }
+
+  /* Rule editor: each row (Birth / Survival) lists its label followed by
+     9 small checkbox+number labels, one per possible neighbor count. */
+  #ruleEditor {
+    margin-bottom: 12px;
+    font-size: 13px;
+  }
+
+  #randomRuleBtn {
+    margin-bottom: 6px;
+  }
+
+  .ruleRow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+  }
+
+  .ruleLabel {
+    margin-right: 4px;
+  }
+
+  .ruleRow label {
+    display: flex;
+    align-items: center;
+    gap: 2px;
   }
 
   canvas {
@@ -80,9 +120,57 @@
   <label for="speedSlider">Speed:
     <input type="range" id="speedSlider" min="1" max="30" value="10">
   </label>
+  <label for="probabilitySlider">Probability:
+    <input type="range" id="probabilitySlider" min="0" max="100" step="0.1" value="35">
+  </label>
+  <label for="probabilityInput">
+    <input type="number" id="probabilityInput" min="0" max="100" step="0.1" value="35">%
+  </label>
+  <button id="randomizeBtn">Random Grid</button>
+  <label for="noiseSlider">Noise:
+    <input type="range" id="noiseSlider" min="0" max="100" step="0.1" value="0">
+  </label>
+  <label for="noiseInput">
+    <input type="number" id="noiseInput" min="0" max="100" step="0.1" value="0">%
+  </label>
 </div>
 
 <div id="generationCount">Generation: 0</div>
+
+<!-- Rule editor: lets the user define a custom B/S (Birth/Survival) rule
+     by checking which neighbor counts (0-8) trigger birth or survival,
+     instead of typing B/S notation directly. -->
+<div id="ruleEditor">
+  <button id="randomRuleBtn">Random Rule</button>
+  <div class="ruleRow">
+    <span class="ruleLabel">Birth (dead cell becomes alive with N neighbors):</span>
+    <!-- One checkbox per possible neighbor count, 0 through 8.
+         Checked = that count is in the birth set. Classic Life: only 3. -->
+    <label><input type="checkbox" class="birthCheckbox" value="0">0</label>
+    <label><input type="checkbox" class="birthCheckbox" value="1">1</label>
+    <label><input type="checkbox" class="birthCheckbox" value="2">2</label>
+    <label><input type="checkbox" class="birthCheckbox" value="3" checked>3</label>
+    <label><input type="checkbox" class="birthCheckbox" value="4">4</label>
+    <label><input type="checkbox" class="birthCheckbox" value="5">5</label>
+    <label><input type="checkbox" class="birthCheckbox" value="6">6</label>
+    <label><input type="checkbox" class="birthCheckbox" value="7">7</label>
+    <label><input type="checkbox" class="birthCheckbox" value="8">8</label>
+  </div>
+  <div class="ruleRow">
+    <span class="ruleLabel">Survival (live cell stays alive with N neighbors):</span>
+    <!-- Same idea, but for whether an already-alive cell survives.
+         Classic Life: 2 or 3. -->
+    <label><input type="checkbox" class="survivalCheckbox" value="0">0</label>
+    <label><input type="checkbox" class="survivalCheckbox" value="1">1</label>
+    <label><input type="checkbox" class="survivalCheckbox" value="2" checked>2</label>
+    <label><input type="checkbox" class="survivalCheckbox" value="3" checked>3</label>
+    <label><input type="checkbox" class="survivalCheckbox" value="4">4</label>
+    <label><input type="checkbox" class="survivalCheckbox" value="5">5</label>
+    <label><input type="checkbox" class="survivalCheckbox" value="6">6</label>
+    <label><input type="checkbox" class="survivalCheckbox" value="7">7</label>
+    <label><input type="checkbox" class="survivalCheckbox" value="8">8</label>
+  </div>
+</div>
 
 <canvas id="grid"></canvas>
 
@@ -131,6 +219,43 @@ function createEmptyGrid() {
   return g;
 }
 
+// Builds a brand new grid where every cell is independently rolled against
+// the given probability (0 to 1). This is a full overwrite — it does NOT
+// preserve or merge with whatever pattern was on the board before, and it
+// does NOT touch the generation counter (randomizing is treated the same
+// as manually drawing cells, just automated across the whole grid at once).
+function randomizeGrid(probability) {
+  const g = [];
+  for (let r = 0; r < ROWS; r++) {
+    const row = [];
+    for (let c = 0; c < COLS; c++) {
+      // Math.random() returns a float in [0, 1). A cell is alive if the
+      // roll falls below the target probability, so higher probability
+      // means more cells start alive on average.
+      row.push(Math.random() < probability ? 1 : 0);
+    }
+    g.push(row);
+  }
+  return g;
+}
+
+// Applies random noise to a grid by independently toggling each cell
+// (dead becomes alive, alive becomes dead) with the given probability.
+// This mutates the grid it's given in place — it's meant to be applied to
+// the freshly-computed "next" grid, so the toggled cells become real input
+// to the following generation, not just a one-frame visual change that
+// would get overwritten by the next rule application.
+function applyNoise(g, probability) {
+  if (probability <= 0) return; // nothing to do — skip the loop entirely
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (Math.random() < probability) {
+        g[r][c] = g[r][c] === 1 ? 0 : 1; // toggle
+      }
+    }
+  }
+}
+
 // Counts how many of a cell's 8 neighbors are alive.
 // Uses simple bounds-checking (no wrap-around) — edges of the grid are
 // treated as "dead" beyond the border.
@@ -149,22 +274,46 @@ function countLiveNeighbors(g, row, col) {
   return count;
 }
 
+// Reads the current rule from the checkboxes in the rule editor and
+// returns it as two Sets of neighbor counts: one for birth, one for
+// survival. Called fresh each time a generation is computed, so toggling
+// a checkbox takes effect immediately on the next step (no "Apply" button
+// needed) — same "takes effect right away" pattern as the speed slider.
+function getCurrentRule() {
+  const birthSet = new Set();
+  document.querySelectorAll('.birthCheckbox:checked').forEach((box) => {
+    birthSet.add(Number(box.value));
+  });
+
+  const survivalSet = new Set();
+  document.querySelectorAll('.survivalCheckbox:checked').forEach((box) => {
+    survivalSet.add(Number(box.value));
+  });
+
+  return { birthSet, survivalSet };
+}
+
 // Computes the next generation from the current grid, following the
-// standard Conway's Game of Life rules:
+// rule currently set in the rule editor (Birth counts / Survival counts).
+// By default this is Conway's classic rule:
 //   1. Any live cell with 2 or 3 live neighbors survives.
 //   2. Any dead cell with exactly 3 live neighbors becomes alive.
 //   3. All other live cells die; all other dead cells stay dead.
+// but any of the 9 neighbor counts (0-8) can be toggled in or out of
+// either the birth or survival set via the checkboxes.
 function computeNextGeneration(g) {
   const next = createEmptyGrid();
+  const { birthSet, survivalSet } = getCurrentRule();
+
   for (let r = 0; r < ROWS; r++) {
     for (let c = 0; c < COLS; c++) {
       const liveNeighbors = countLiveNeighbors(g, r, c);
       const isAlive = g[r][c] === 1;
 
-      if (isAlive && (liveNeighbors === 2 || liveNeighbors === 3)) {
+      if (isAlive && survivalSet.has(liveNeighbors)) {
         next[r][c] = 1; // survives
-      } else if (!isAlive && liveNeighbors === 3) {
-        next[r][c] = 1; // becomes alive (reproduction)
+      } else if (!isAlive && birthSet.has(liveNeighbors)) {
+        next[r][c] = 1; // becomes alive (birth)
       } else {
         next[r][c] = 0; // dies or stays dead
       }
@@ -220,7 +369,15 @@ function updateGenerationLabel() {
 // Advances the simulation by exactly one generation (used both by the
 // "Step" button while paused, and internally by the running loop).
 function stepForward() {
-  grid = computeNextGeneration(grid);
+  let nextGrid = computeNextGeneration(grid);
+
+  // Apply noise (if any) directly to the new grid before it becomes the
+  // live grid — this ensures toggled cells actually feed into the next
+  // rule application, rather than just flickering on screen for one frame.
+  const noiseProbability = Number(document.getElementById('noiseInput').value) / 100;
+  applyNoise(nextGrid, noiseProbability);
+
+  grid = nextGrid;
   generation++;
   drawGrid();
   updateGenerationLabel();
@@ -329,6 +486,71 @@ document.getElementById('speedSlider').addEventListener('input', (evt) => {
     clearTimeout(intervalId);
     scheduleNextTick();
   }
+});
+
+// --- Probability controls (slider + typed number field, kept in sync) ---
+const probabilitySlider = document.getElementById('probabilitySlider');
+const probabilityInput = document.getElementById('probabilityInput');
+
+// Dragging the slider updates the number field to match.
+probabilitySlider.addEventListener('input', (evt) => {
+  probabilityInput.value = evt.target.value;
+});
+
+// Typing in the number field updates the slider to match.
+// Values are clamped to the valid 0-100 range so an out-of-range typed
+// value (e.g. "150") can't desync the two controls.
+probabilityInput.addEventListener('input', (evt) => {
+  let value = Number(evt.target.value);
+  if (Number.isNaN(value)) return; // ignore empty/invalid input while typing
+  value = Math.min(100, Math.max(0, value));
+  probabilitySlider.value = value;
+});
+
+// Randomize button: reads whatever probability is currently set (as a
+// percentage, 0-100) and applies it as a full-grid overwrite.
+document.getElementById('randomizeBtn').addEventListener('click', () => {
+  const probabilityPercent = Number(probabilityInput.value);
+  const probability = probabilityPercent / 100; // convert percent to 0-1 range
+  grid = randomizeGrid(probability);
+  drawGrid();
+  // Note: generation counter is intentionally left untouched, same as
+  // manually drawing cells — only the Reset button resets it.
+});
+
+// --- Noise controls (slider + typed number field, kept in sync) ---
+// Noise is the probability that any given cell toggles (dead<->alive)
+// after each generation is computed. It's read directly from the number
+// field inside stepForward, so changes take effect on the very next step —
+// no separate "Apply" button needed.
+const noiseSlider = document.getElementById('noiseSlider');
+const noiseInput = document.getElementById('noiseInput');
+
+// Dragging the slider updates the number field to match.
+noiseSlider.addEventListener('input', (evt) => {
+  noiseInput.value = evt.target.value;
+});
+
+// Typing in the number field updates the slider to match, clamped to
+// the valid 0-100 range so the two controls can't desync.
+noiseInput.addEventListener('input', (evt) => {
+  let value = Number(evt.target.value);
+  if (Number.isNaN(value)) return; // ignore empty/invalid input while typing
+  value = Math.min(100, Math.max(0, value));
+  noiseSlider.value = value;
+});
+
+// Randomize the rule: each of the 18 checkboxes (9 Birth + 9 Survival) is
+// independently flipped on with 50% probability, same coin-flip logic used
+// for randomizing the grid. This can easily produce "degenerate" rules
+// (e.g. nothing is ever born, or nothing ever survives) — that's expected
+// with a fair 50/50 flip across every count, not a bug.
+document.getElementById('randomRuleBtn').addEventListener('click', () => {
+  document.querySelectorAll('.birthCheckbox, .survivalCheckbox').forEach((box) => {
+    box.checked = Math.random() < 0.5;
+  });
+  // No need to touch the grid or generation counter — the new rule just
+  // takes effect on whatever step happens next (Step, or the running loop).
 });
 
 /* =========================================================================
